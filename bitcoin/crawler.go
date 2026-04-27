@@ -183,6 +183,10 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 			log.Errorf("[%s] GetAddr failed: %v", addrs, err)
 		}
 
+		if err := conn.SetDeadline(time.Now().Add(180 * time.Second)); err != nil {
+			log.WithError(err).Warnln("Could not set connection deadline")
+		}
+
 	Loop:
 		for {
 			// Read messages in a loop and handle the different message types accordingly
@@ -193,7 +197,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 					continue
 				}
 				if errors.Is(err, io.EOF) {
-					log.WithField("addr", pi.Addr).Debugln("Peer closed connection")
+					log.WithField("addr", pi.Addr).Warningln("Peer closed connection")
 				} else {
 					log.Errorf("[%s] Failed to read message: %v", pi.Addr, err)
 				}
@@ -202,12 +206,14 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 
 			switch tmsg := msg.(type) {
 			case *wire.MsgAddr:
+				log.Infoln("Received a Addr message")
 				peers := processAddrs(tmsg.AddrList)
 				neighbours = append(neighbours, peers...)
 				if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
 					break Loop
 				}
 			case *wire.MsgAddrV2:
+				log.Infoln("Received a AddrV2 message")
 				legacyAddrs := make([]*wire.NetAddress, len(tmsg.AddrList))
 				for i, addr := range tmsg.AddrList {
 					legacyAddrs[i] = addr.ToLegacy()
@@ -233,10 +239,6 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 				log.WithField("error", err).Errorf("Error when requesting peers")
 				break Loop
 			}
-		}
-
-		if len(neighbours) == 0 {
-			log.WithField("addr", pi.Addr).Warnln("Loop exited before receiving any addr response to GetAddr")
 		}
 
 		if len(neighbours) > 0 {
@@ -387,4 +389,3 @@ func processAddrs(addrs []*wire.NetAddress) []PeerInfo {
 	}
 	return peers
 }
-
