@@ -259,6 +259,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 				if tmsg != nil {
 					log.WithField("msg_type", tmsg.Command()).Debugf("Found other message from %s", pi.Addr)
 				}
+				// Why do we have this tolerate limit ? It should just be ignored. Add a timeout for the crawling function instead ?
 				tolerateMessages--
 			}
 			err = c.WriteMessage(conn, wire.NewMsgGetAddr())
@@ -266,6 +267,10 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 				log.WithField("error", err).Errorf("Error when requesting peers")
 				break Loop
 			}
+		}
+
+		if firstReceived == -1 {
+			log.WithField("addr", pi.Addr).Warnln("Loop exited before receiving any addr response to GetAddr")
 		}
 
 		if len(neighbours) > 0 {
@@ -417,7 +422,7 @@ func processAddrs(addrs []*wire.NetAddress) []PeerInfo {
 	return peers
 }
 
-// Helper function to handle firstReceived logic
+// Helper function to handle firstReceived logic What???
 func checkShouldBreak(firstReceived *int, addrCount int) bool {
 	if *firstReceived == -1 {
 		*firstReceived = addrCount
