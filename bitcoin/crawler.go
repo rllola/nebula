@@ -187,20 +187,11 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 		// messages after which it just stops. These numbers here
 		// specify the amount of such messages to be tolerated
 		firstReceived := -1
-		tolerateMessages := 5
-		// The nodes send a lot of inv messages
-		tolerateInvMessages := 50
-		tolerateVerAckMessages := 10
-		toleratePingMessages := 3
 
 	Loop:
 		for {
 			// Read messages in a loop and handle the different message types accordingly
 			msg, _, err := c.ReadMessage(conn)
-			if tolerateMessages < 0 {
-				log.Errorf("Tolerated enough messages from: %s", pi.Addr)
-				break Loop
-			}
 			if err != nil {
 				if errors.Is(err, wire.ErrUnknownMessage) {
 					log.WithField("addr", pi.Addr).Debugln("Received unknown message, skipping")
@@ -232,35 +223,15 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 					break Loop
 				}
 			case *wire.MsgPing:
-				log.WithField("addr", pi.Addr).WithField("toleratePingMessages", toleratePingMessages).Debugln("Sending Pong message...")
-				toleratePingMessages--
 				err = c.WriteMessage(conn, wire.NewMsgPong(tmsg.Nonce))
 				if err != nil {
 					log.Errorf("Pong msg err: %s", err)
-					break Loop
-				}
-				if toleratePingMessages < 0 {
-					log.Debugln("Ran out of limit to tolerate Ping messages")
-					break Loop
-				}
-			case *wire.MsgVerAck:
-				tolerateVerAckMessages--
-				if tolerateVerAckMessages < 0 {
-					log.Debugln("Ran out of limit to tolerate Ver Ack messages")
-					break Loop
-				}
-			case *wire.MsgInv:
-				tolerateInvMessages--
-				if tolerateInvMessages < 0 {
-					log.Debugln("Ran out of limit to tolerate Inv messages")
 					break Loop
 				}
 			default:
 				if tmsg != nil {
 					log.WithField("msg_type", tmsg.Command()).Debugf("Found other message from %s", pi.Addr)
 				}
-				// Why do we have this tolerate limit ? It should just be ignored. Add a timeout for the crawling function instead ?
-				tolerateMessages--
 			}
 			err = c.WriteMessage(conn, wire.NewMsgGetAddr())
 			if err != nil {
