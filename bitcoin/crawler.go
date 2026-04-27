@@ -183,11 +183,6 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 			log.Errorf("[%s] GetAddr failed: %v", addrs, err)
 		}
 
-		// The code tolerates a certain amount of unsolicited
-		// messages after which it just stops. These numbers here
-		// specify the amount of such messages to be tolerated
-		firstReceived := -1
-
 	Loop:
 		for {
 			// Read messages in a loop and handle the different message types accordingly
@@ -209,7 +204,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 			case *wire.MsgAddr:
 				peers := processAddrs(tmsg.AddrList)
 				neighbours = append(neighbours, peers...)
-				if checkShouldBreak(&firstReceived, len(tmsg.AddrList)) {
+				if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
 					break Loop
 				}
 			case *wire.MsgAddrV2:
@@ -219,7 +214,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 				}
 				peers := processAddrs(legacyAddrs)
 				neighbours = append(neighbours, peers...)
-				if checkShouldBreak(&firstReceived, len(tmsg.AddrList)) {
+				if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
 					break Loop
 				}
 			case *wire.MsgPing:
@@ -240,7 +235,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 			}
 		}
 
-		if firstReceived == -1 {
+		if len(neighbours) == 0 {
 			log.WithField("addr", pi.Addr).Warnln("Loop exited before receiving any addr response to GetAddr")
 		}
 
@@ -393,11 +388,3 @@ func processAddrs(addrs []*wire.NetAddress) []PeerInfo {
 	return peers
 }
 
-// Helper function to handle firstReceived logic What???
-func checkShouldBreak(firstReceived *int, addrCount int) bool {
-	if *firstReceived == -1 {
-		*firstReceived = addrCount
-		return false
-	}
-	return *firstReceived > addrCount || *firstReceived == 0
-}
