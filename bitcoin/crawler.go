@@ -47,7 +47,7 @@ func (c *Crawler) Work(ctx context.Context, task PeerInfo) (core.CrawlResult[Pee
 	crawlStart := time.Now()
 
 	// start crawling
-	bitcoinResult := <-c.crawlBitcoin(ctx, task)
+	bitcoinResult := c.crawlBitcoin(ctx, task)
 
 	properties := c.PeerProperties(&task.AddrInfo)
 
@@ -119,186 +119,171 @@ type BitcoinResult struct {
 	RoutingTable     *core.RoutingTable[PeerInfo]
 }
 
-func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) chan BitcoinResult {
-	resultCh := make(chan BitcoinResult)
+func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
+	result := BitcoinResult{}
+	neighbours := make([]PeerInfo, 0)
 
-	go func() {
-		result := BitcoinResult{}
-		defer close(resultCh)
-		neighbours := make([]PeerInfo, 0)
+	addrs := pi.Addrs()
 
-		addrs := pi.Addrs()
+	var conn net.Conn
+	result.ConnectStartTime = time.Now()
+	conn, result.ConnectError = c.connect(ctx, addrs)
 
-		var conn net.Conn
-		result.ConnectStartTime = time.Now()
-		conn, result.ConnectError = c.connect(ctx, addrs) // use filtered addr list
-
-		if conn == nil {
-			result.RoutingTable = &core.RoutingTable[PeerInfo]{
-				PeerID:    pi.ID(),
-				Neighbors: neighbours,
-				ErrorBits: uint16(0), // FIXME
-				Error:     result.Error,
-			}
-			result.Error = result.ConnectError
-			resultCh <- result
-			return
-		}
-
-		result.ConnectEndTime = time.Now()
-
-		defer conn.Close()
-
-		// If we could successfully connect to the peer we actually crawl it.
-		if result.ConnectError == nil {
-
-			tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr)
-			if ok {
-				// construct connect maddr if we have received a response
-				var ipScheme string
-				if p4 := tcpAddr.IP.To4(); len(p4) == net.IPv4len {
-					ipScheme = "ip4"
-				} else {
-					ipScheme = "ip6"
-				}
-
-				maddrStr := strings.Join([]string{"", ipScheme, tcpAddr.IP.String(), tcpAddr.Network(), strconv.Itoa(tcpAddr.Port)}, "/")
-				maddr, err := ma.NewMultiaddr(maddrStr)
-				if err != nil {
-					log.WithError(err).WithField("maddr", maddrStr).Warnln("Could not construct connect maddr")
-				} else {
-					result.ConnectMaddr = maddr
-				}
-			} else {
-				log.WithField("addr", conn.RemoteAddr()).Warnln("Not a TCP address, cannot construct connect maddr")
-			}
-
-			result.ConnectMaddr = pi.AddrInfo.Addr[0]
-
-			nodeRes, err := c.Handshake(conn)
-			result.Agent = nodeRes.UserAgent
-			result.ProtocolVersion = nodeRes.ProtocolVersion
-			if err != nil {
-				log.Errorf("[%s] Handshake failed: %v", addrs, err)
-			}
-
-			err = c.WriteMessage(conn, wire.NewMsgGetAddr())
-			if err != nil {
-				log.Errorf("[%s] GetAddr failed: %v", addrs, err)
-			}
-
-			// The code tolerates a certain amount of unsolicited
-			// messages after which it just stops. These numbers here
-			// specify the amount of such messages to be tolerated
-			firstReceived := -1
-			tolerateMessages := 5
-			// The nodes send a lot of inv messages
-			tolerateInvMessages := 50
-			tolerateVerAckMessages := 10
-			toleratePingMessages := 3
-
-		Loop:
-			for {
-				// Read messages in a loop and handle the different message types accordingly
-				msg, _, err := c.ReadMessage(conn)
-				if tolerateMessages < 0 {
-					log.Errorf("Tolerated enough messages from: %s", pi.Addr)
-					break Loop
-				}
-				if err != nil {
-					// log.WithField("address", addrInfo).WithField("num_peers", len(neighbours)).WithField("err", err).WithField("otherMessages", otherMessages).Warningf("Giving up with results after tolerating messages: .")
-					log.Errorf("[%s] Failed to read message: %v", pi.Addr, err)
-				}
-
-				switch tmsg := msg.(type) {
-				case *wire.MsgAddr:
-					peers := processAddrs(tmsg.AddrList)
-					neighbours = append(neighbours, peers...)
-					if checkShouldBreak(&firstReceived, len(tmsg.AddrList)) {
-						break Loop
-					}
-				case *wire.MsgAddrV2:
-					legacyAddrs := make([]*wire.NetAddress, len(tmsg.AddrList))
-					for i, addr := range tmsg.AddrList {
-						legacyAddrs[i] = addr.ToLegacy()
-					}
-					peers := processAddrs(legacyAddrs)
-					neighbours = append(neighbours, peers...)
-					if checkShouldBreak(&firstReceived, len(tmsg.AddrList)) {
-						break Loop
-					}
-				case *wire.MsgPing:
-					log.WithField("addr", pi.Addr).WithField("toleratePingMessages", toleratePingMessages).Debugln("Sending Pong message...")
-					toleratePingMessages--
-					err = c.WriteMessage(conn, wire.NewMsgPong(tmsg.Nonce))
-					if err != nil {
-						log.Errorf("Pong msg err: %s", err)
-						break Loop
-					}
-					if toleratePingMessages < 0 {
-						log.Debugln("Ran out of limit to tolerate Ping messages")
-						break Loop
-					}
-				case *wire.MsgVerAck:
-					tolerateVerAckMessages--
-					if tolerateVerAckMessages < 0 {
-						log.Debugln("Ran out of limit to tolerate Ver Ack messages")
-						break Loop
-					}
-				case *wire.MsgInv:
-					tolerateInvMessages--
-					if tolerateInvMessages < 0 {
-						log.Debugln("Ran out of limit to tolerate Inv messages")
-						break Loop
-					}
-				default:
-					if tmsg != nil {
-						log.WithField("msg_type", tmsg.Command()).Debugf("Found other message from %s", pi.Addr)
-					}
-					tolerateMessages--
-				}
-				err = c.WriteMessage(conn, wire.NewMsgGetAddr())
-				if err != nil {
-					log.WithField("error", err).Errorf("Error when requesting peers")
-					break Loop
-				}
-
-			}
-
-			if len(neighbours) > 0 {
-				log.WithField("num_peers", len(neighbours)).WithField("addr", pi.Addr).Infoln("Found peers")
-			} else {
-				log.WithField("addr", pi.Addr).Infoln("Found no peers")
-			}
-
-		} else {
-			result.Error = result.ConnectError
-		}
-
+	if conn == nil {
 		result.RoutingTable = &core.RoutingTable[PeerInfo]{
 			PeerID:    pi.ID(),
 			Neighbors: neighbours,
-			ErrorBits: uint16(0),
+			ErrorBits: uint16(0), // FIXME
 			Error:     result.Error,
 		}
+		result.Error = result.ConnectError
+		return result
+	}
 
-		// if there was a connection error, parse it to a known one
-		if result.ConnectError != nil {
-			result.ConnectErrorStr = db.NetError(result.ConnectError)
+	result.ConnectEndTime = time.Now()
+	defer conn.Close()
+
+	// If we could successfully connect to the peer we actually crawl it.
+	if result.ConnectError == nil {
+
+		tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr)
+		if ok {
+			// construct connect maddr if we have received a response
+			var ipScheme string
+			if p4 := tcpAddr.IP.To4(); len(p4) == net.IPv4len {
+				ipScheme = "ip4"
+			} else {
+				ipScheme = "ip6"
+			}
+
+			maddrStr := strings.Join([]string{"", ipScheme, tcpAddr.IP.String(), tcpAddr.Network(), strconv.Itoa(tcpAddr.Port)}, "/")
+			maddr, err := ma.NewMultiaddr(maddrStr)
+			if err != nil {
+				log.WithError(err).WithField("maddr", maddrStr).Warnln("Could not construct connect maddr")
+			} else {
+				result.ConnectMaddr = maddr
+			}
+		} else {
+			log.WithField("addr", conn.RemoteAddr()).Warnln("Not a TCP address, cannot construct connect maddr")
 		}
 
-		if result.Error != nil {
-			result.ErrorStr = db.NetError(result.Error)
+		result.ConnectMaddr = pi.AddrInfo.Addr[0]
+
+		nodeRes, err := c.Handshake(conn)
+		result.Agent = nodeRes.UserAgent
+		result.ProtocolVersion = nodeRes.ProtocolVersion
+		if err != nil {
+			log.Errorf("[%s] Handshake failed: %v", addrs, err)
 		}
 
-		// send the result back and close channel
-		select {
-		case resultCh <- result:
-		case <-ctx.Done():
+		err = c.WriteMessage(conn, wire.NewMsgGetAddr())
+		if err != nil {
+			log.Errorf("[%s] GetAddr failed: %v", addrs, err)
 		}
-	}()
 
-	return resultCh
+		// The code tolerates a certain amount of unsolicited
+		// messages after which it just stops. These numbers here
+		// specify the amount of such messages to be tolerated
+		firstReceived := -1
+		tolerateMessages := 5
+		// The nodes send a lot of inv messages
+		tolerateInvMessages := 50
+		tolerateVerAckMessages := 10
+		toleratePingMessages := 3
+
+	Loop:
+		for {
+			// Read messages in a loop and handle the different message types accordingly
+			msg, _, err := c.ReadMessage(conn)
+			if tolerateMessages < 0 {
+				log.Errorf("Tolerated enough messages from: %s", pi.Addr)
+				break Loop
+			}
+			if err != nil {
+				log.Errorf("[%s] Failed to read message: %v", pi.Addr, err)
+				break Loop
+			}
+
+			switch tmsg := msg.(type) {
+			case *wire.MsgAddr:
+				peers := processAddrs(tmsg.AddrList)
+				neighbours = append(neighbours, peers...)
+				if checkShouldBreak(&firstReceived, len(tmsg.AddrList)) {
+					break Loop
+				}
+			case *wire.MsgAddrV2:
+				legacyAddrs := make([]*wire.NetAddress, len(tmsg.AddrList))
+				for i, addr := range tmsg.AddrList {
+					legacyAddrs[i] = addr.ToLegacy()
+				}
+				peers := processAddrs(legacyAddrs)
+				neighbours = append(neighbours, peers...)
+				if checkShouldBreak(&firstReceived, len(tmsg.AddrList)) {
+					break Loop
+				}
+			case *wire.MsgPing:
+				log.WithField("addr", pi.Addr).WithField("toleratePingMessages", toleratePingMessages).Debugln("Sending Pong message...")
+				toleratePingMessages--
+				err = c.WriteMessage(conn, wire.NewMsgPong(tmsg.Nonce))
+				if err != nil {
+					log.Errorf("Pong msg err: %s", err)
+					break Loop
+				}
+				if toleratePingMessages < 0 {
+					log.Debugln("Ran out of limit to tolerate Ping messages")
+					break Loop
+				}
+			case *wire.MsgVerAck:
+				tolerateVerAckMessages--
+				if tolerateVerAckMessages < 0 {
+					log.Debugln("Ran out of limit to tolerate Ver Ack messages")
+					break Loop
+				}
+			case *wire.MsgInv:
+				tolerateInvMessages--
+				if tolerateInvMessages < 0 {
+					log.Debugln("Ran out of limit to tolerate Inv messages")
+					break Loop
+				}
+			default:
+				if tmsg != nil {
+					log.WithField("msg_type", tmsg.Command()).Debugf("Found other message from %s", pi.Addr)
+				}
+				tolerateMessages--
+			}
+			err = c.WriteMessage(conn, wire.NewMsgGetAddr())
+			if err != nil {
+				log.WithField("error", err).Errorf("Error when requesting peers")
+				break Loop
+			}
+		}
+
+		if len(neighbours) > 0 {
+			log.WithField("num_peers", len(neighbours)).WithField("addr", pi.Addr).Infoln("Found peers")
+		} else {
+			log.WithField("addr", pi.Addr).Infoln("Found no peers")
+		}
+
+	} else {
+		result.Error = result.ConnectError
+	}
+
+	result.RoutingTable = &core.RoutingTable[PeerInfo]{
+		PeerID:    pi.ID(),
+		Neighbors: neighbours,
+		ErrorBits: uint16(0),
+		Error:     result.Error,
+	}
+
+	if result.ConnectError != nil {
+		result.ConnectErrorStr = db.NetError(result.ConnectError)
+	}
+
+	if result.Error != nil {
+		result.ErrorStr = db.NetError(result.Error)
+	}
+
+	return result
 }
 
 type BitcoinNodeResult struct {
