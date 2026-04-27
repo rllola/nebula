@@ -285,12 +285,6 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) chan BitcoinRes
 		// if there was a connection error, parse it to a known one
 		if result.ConnectError != nil {
 			result.ConnectErrorStr = db.NetError(result.ConnectError)
-		} else {
-			// Free connection resources
-			if err := conn.Close(); err != nil {
-				log.WithError(err).WithField("remoteID", pi.ID().ShortString()).Warnln("Could not close connection to peer")
-			}
-			conn = nil
 		}
 
 		if result.Error != nil {
