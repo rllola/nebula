@@ -342,26 +342,15 @@ func (c *Crawler) Handshake(conn net.Conn) (BitcoinNodeResult, error) {
 
 // connect establishes a connection to the given peer
 func (c *Crawler) connect(ctx context.Context, addrs []ma.Multiaddr) (net.Conn, error) {
-	var conn net.Conn
-	var err error
-	connectionMaxRetry := 10
-
-	if len(addrs) > 0 {
-		for i := 0; i < connectionMaxRetry; i++ {
-			netAddr, err := manet.ToNetAddr(addrs[0])
-			if err != nil {
-				break
-			}
-			d := net.Dialer{
-				Timeout: c.cfg.DialTimeout,
-			}
-			conn, err = d.DialContext(ctx, netAddr.Network(), netAddr.String())
-			if err == nil {
-				break
-			}
-		}
+	if len(addrs) == 0 {
+		return nil, nil
 	}
-	return conn, err
+	netAddr, err := manet.ToNetAddr(addrs[0])
+	if err != nil {
+		return nil, err
+	}
+	d := net.Dialer{Timeout: c.cfg.DialTimeout}
+	return d.DialContext(ctx, netAddr.Network(), netAddr.String())
 }
 
 func (c *Crawler) WriteMessage(conn net.Conn, msg wire.Message) error {
