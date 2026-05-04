@@ -206,14 +206,16 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 
 			switch tmsg := msg.(type) {
 			case *wire.MsgAddr:
-				log.Infoln("Received a Addr message")
 				peers := processAddrs(tmsg.AddrList)
 				neighbours = append(neighbours, peers...)
 				if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
 					break Loop
 				}
+				if err = c.WriteMessage(conn, wire.NewMsgGetAddr()); err != nil {
+					log.WithField("error", err).Errorf("Error when requesting peers")
+					break Loop
+				}
 			case *wire.MsgAddrV2:
-				log.Infoln("Received a AddrV2 message")
 				legacyAddrs := make([]*wire.NetAddress, len(tmsg.AddrList))
 				for i, addr := range tmsg.AddrList {
 					legacyAddrs[i] = addr.ToLegacy()
@@ -223,9 +225,12 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 				if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
 					break Loop
 				}
+				if err = c.WriteMessage(conn, wire.NewMsgGetAddr()); err != nil {
+					log.WithField("error", err).Errorf("Error when requesting peers")
+					break Loop
+				}
 			case *wire.MsgPing:
-				err = c.WriteMessage(conn, wire.NewMsgPong(tmsg.Nonce))
-				if err != nil {
+				if err = c.WriteMessage(conn, wire.NewMsgPong(tmsg.Nonce)); err != nil {
 					log.Errorf("Pong msg err: %s", err)
 					break Loop
 				}
@@ -233,11 +238,6 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 				if tmsg != nil {
 					log.WithField("msg_type", tmsg.Command()).Debugf("Found other message from %s", pi.Addr)
 				}
-			}
-			err = c.WriteMessage(conn, wire.NewMsgGetAddr())
-			if err != nil {
-				log.WithField("error", err).Errorf("Error when requesting peers")
-				break Loop
 			}
 		}
 
@@ -340,7 +340,7 @@ func (c *Crawler) Handshake(conn net.Conn) (BitcoinNodeResult, error) {
 	return result, nil
 }
 
-// connect establishes a connection to the given peer
+// connect establishes a connection to the given peer, with one retry on timeout
 func (c *Crawler) connect(ctx context.Context, addrs []ma.Multiaddr) (net.Conn, error) {
 	if len(addrs) == 0 {
 		return nil, nil
@@ -350,7 +350,19 @@ func (c *Crawler) connect(ctx context.Context, addrs []ma.Multiaddr) (net.Conn, 
 		return nil, err
 	}
 	d := net.Dialer{Timeout: c.cfg.DialTimeout}
-	return d.DialContext(ctx, netAddr.Network(), netAddr.String())
+	conn, err := d.DialContext(ctx, netAddr.Network(), netAddr.String())
+
+	// Retry only if we had a timeout.
+	// If the connection is refused by the node retrying would just make the crawler slower.
+	if err != nil && isTimeoutError(err) {
+		conn, err = d.DialContext(ctx, netAddr.Network(), netAddr.String())
+	}
+	return conn, err
+}
+
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (c *Crawler) WriteMessage(conn net.Conn, msg wire.Message) error {
