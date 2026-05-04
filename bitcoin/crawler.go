@@ -145,6 +145,10 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 	result.ConnectEndTime = time.Now()
 	defer conn.Close()
 
+	if err := conn.SetDeadline(time.Now().Add(180 * time.Second)); err != nil {
+		log.WithError(err).Warnln("Could not set connection deadline")
+	}
+
 	// If we could successfully connect to the peer we actually crawl it.
 	if result.ConnectError == nil {
 
@@ -181,10 +185,6 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 		err = c.WriteMessage(conn, wire.NewMsgGetAddr())
 		if err != nil {
 			log.Errorf("[%s] GetAddr failed: %v", addrs, err)
-		}
-
-		if err := conn.SetDeadline(time.Now().Add(180 * time.Second)); err != nil {
-			log.WithError(err).Warnln("Could not set connection deadline")
 		}
 
 	Loop:
