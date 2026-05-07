@@ -51,7 +51,7 @@ func (c *Crawler) Work(ctx context.Context, task PeerInfo) (core.CrawlResult[Pee
 	// start crawling
 	bitcoinResult := c.crawlBitcoin(ctx, task)
 
-	properties := c.PeerProperties(&task.AddrInfo)
+	properties := c.PeerProperties(&bitcoinResult)
 
 	// keep track of all unknown connection errors
 	if bitcoinResult.ConnectErrorStr == pgmodels.NetErrorUnknown && bitcoinResult.ConnectError != nil {
@@ -100,13 +100,10 @@ func (c *Crawler) Work(ctx context.Context, task PeerInfo) (core.CrawlResult[Pee
 	return cr, nil
 }
 
-func (c *Crawler) PeerProperties(node *AddrInfo) map[string]any {
-	// TODO: to be implemented later
-	properties := map[string]any{}
-
-	properties["Services"] = "TBI"
-
-	return properties
+func (c *Crawler) PeerProperties(result *BitcoinResult) map[string]any {
+	return map[string]any{
+		"services": result.Services.String(),
+	}
 }
 
 type BitcoinResult struct {
@@ -117,6 +114,7 @@ type BitcoinResult struct {
 	ConnectMaddr     ma.Multiaddr
 	Agent            string
 	ProtocolVersion  int32
+	Services         wire.ServiceFlag
 	Protocols        []string
 	ListenAddrs      []ma.Multiaddr
 	Error            error
@@ -185,6 +183,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 		nodeRes, err := c.Handshake(conn)
 		result.Agent = nodeRes.UserAgent
 		result.ProtocolVersion = nodeRes.ProtocolVersion
+		result.Services = nodeRes.Services
 		if nodeRes.ListenAddr != nil {
 			result.ListenAddrs = []ma.Multiaddr{nodeRes.ListenAddr}
 		}
@@ -278,6 +277,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 type BitcoinNodeResult struct {
 	ProtocolVersion int32
 	UserAgent       string
+	Services        wire.ServiceFlag
 	ListenAddr      ma.Multiaddr
 	pver            int32
 }
@@ -329,6 +329,7 @@ func (c *Crawler) Handshake(conn net.Conn) (BitcoinNodeResult, error) {
 
 	result.ProtocolVersion = vmsg.ProtocolVersion
 	result.UserAgent = vmsg.UserAgent
+	result.Services = vmsg.Services
 
 	ip := vmsg.AddrMe.IP
 	if ip != nil && !ip.IsUnspecified() {
