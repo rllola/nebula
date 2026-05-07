@@ -80,6 +80,9 @@ func (c *Crawler) Work(ctx context.Context, task PeerInfo) (core.CrawlResult[Pee
 		RoutingTable:        bitcoinResult.RoutingTable,
 		Agent:               bitcoinResult.Agent,
 		Protocols:           bitcoinResult.Protocols,
+		DialMaddrs:          task.Addrs(),
+		ConnectMaddr:        bitcoinResult.ConnectMaddr,
+		ListenMaddrs:        bitcoinResult.ListenAddrs,
 		ConnectError:        bitcoinResult.ConnectError,
 		ConnectErrorStr:     bitcoinResult.ConnectErrorStr,
 		CrawlError:          bitcoinResult.Error,
@@ -130,15 +133,19 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 	var conn net.Conn
 	result.ConnectStartTime = time.Now()
 	conn, result.ConnectError = c.connect(ctx, addrs)
+	if result.ConnectError != nil {
+		result.ConnectErrorStr = db.NetError(result.ConnectError)
+	}
 
 	if conn == nil {
 		result.RoutingTable = &core.RoutingTable[PeerInfo]{
 			PeerID:    pi.ID(),
 			Neighbors: neighbours,
 			ErrorBits: uint16(0), // FIXME
-			Error:     result.Error,
+			Error:     result.ConnectError,
 		}
 		result.Error = result.ConnectError
+		result.ErrorStr = result.ConnectErrorStr
 		return result
 	}
 
@@ -256,10 +263,6 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 		Neighbors: neighbours,
 		ErrorBits: uint16(0),
 		Error:     result.Error,
-	}
-
-	if result.ConnectError != nil {
-		result.ConnectErrorStr = db.NetError(result.ConnectError)
 	}
 
 	if result.Error != nil {
