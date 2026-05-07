@@ -185,6 +185,9 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 		nodeRes, err := c.Handshake(conn)
 		result.Agent = nodeRes.UserAgent
 		result.ProtocolVersion = nodeRes.ProtocolVersion
+		if nodeRes.ListenAddr != nil {
+			result.ListenAddrs = []ma.Multiaddr{nodeRes.ListenAddr}
+		}
 		if err != nil {
 			log.Errorf("[%s] Handshake failed: %v", addrs, err)
 		}
@@ -275,6 +278,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 type BitcoinNodeResult struct {
 	ProtocolVersion int32
 	UserAgent       string
+	ListenAddr      ma.Multiaddr
 	pver            int32
 }
 
@@ -325,6 +329,19 @@ func (c *Crawler) Handshake(conn net.Conn) (BitcoinNodeResult, error) {
 
 	result.ProtocolVersion = vmsg.ProtocolVersion
 	result.UserAgent = vmsg.UserAgent
+
+	ip := vmsg.AddrMe.IP
+	if ip != nil && !ip.IsUnspecified() {
+		ipScheme := "ip6"
+		if p4 := ip.To4(); p4 != nil {
+			ipScheme = "ip4"
+			ip = p4
+		}
+		maddrStr := fmt.Sprintf("/%s/%s/tcp/%d", ipScheme, ip.String(), vmsg.AddrMe.Port)
+		if maddr, err := ma.NewMultiaddr(maddrStr); err == nil {
+			result.ListenAddr = maddr
+		}
+	}
 
 	// Negotiate protocol version.
 	if uint32(vmsg.ProtocolVersion) < wire.ProtocolVersion {
