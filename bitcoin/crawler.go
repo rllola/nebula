@@ -131,6 +131,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 	var conn net.Conn
 	result.ConnectStartTime = time.Now()
 	conn, result.ConnectError = c.connect(ctx, addrs)
+	result.ConnectEndTime = time.Now()
 	if result.ConnectError != nil {
 		result.ConnectErrorStr = db.NetError(result.ConnectError)
 	}
@@ -147,7 +148,6 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 		return result
 	}
 
-	result.ConnectEndTime = time.Now()
 	defer conn.Close()
 
 	if err := conn.SetDeadline(time.Now().Add(180 * time.Second)); err != nil {
