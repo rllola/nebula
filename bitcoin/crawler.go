@@ -353,6 +353,12 @@ func (c *Crawler) Handshake(conn net.Conn) (BitcoinNodeResult, error) {
 	// Normally we'd check if vmsg.Nonce == p.nonce but the crawler does not
 	// accept external connections so we skip it.
 
+	// Signal addrv2 support before verack as required by BIP 155.
+	// https://bips.dev/155/
+	if err := c.WriteMessage(conn, &wire.MsgSendAddrV2{}); err != nil {
+		return result, err
+	}
+
 	// Send verack.
 	if err := c.WriteMessage(conn, wire.NewMsgVerAck()); err != nil {
 		return result, err
