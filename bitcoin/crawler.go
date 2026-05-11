@@ -220,7 +220,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 				if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
 					break Loop
 				}
-				if err = c.WriteMessage(conn, wire.NewMsgGetAddr()); err != nil {
+				if err = c.requestMoreAddrs(ctx, conn); err != nil {
 					log.WithField("error", err).Errorf("Error when requesting peers")
 					break Loop
 				}
@@ -234,7 +234,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 				if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
 					break Loop
 				}
-				if err = c.WriteMessage(conn, wire.NewMsgGetAddr()); err != nil {
+				if err = c.requestMoreAddrs(ctx, conn); err != nil {
 					log.WithField("error", err).Errorf("Error when requesting peers")
 					break Loop
 				}
@@ -359,6 +359,19 @@ func (c *Crawler) Handshake(conn net.Conn) (BitcoinNodeResult, error) {
 	}
 
 	return result, nil
+}
+
+// requestMoreAddrs waits 30 seconds before sending a getaddr message. Bitcoin
+// Core rate-limits getaddr responses and will drop requests that arrive too
+// quickly on the same connection.
+// https://github.com/bitcoin/bitcoin/blob/8396b7f2a3be4be7bb2ffc152f87b4cab95dd84e/src/net_processing.cpp#L160
+func (c *Crawler) requestMoreAddrs(ctx context.Context, conn net.Conn) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(30 * time.Second):
+	}
+	return c.WriteMessage(conn, wire.NewMsgGetAddr())
 }
 
 // connect establishes a connection to the given peer, with one retry on timeout
