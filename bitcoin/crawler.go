@@ -416,10 +416,16 @@ func (c *Crawler) ReadMessage(conn net.Conn) (wire.Message, []byte, error) {
 func processAddrs(addrs []*wire.NetAddress) []PeerInfo {
 	var peers []PeerInfo
 	for _, addr := range addrs {
-		maStr := fmt.Sprintf("/ip4/%s/tcp/%d", addr.IP.String(), addr.Port)
+		ip := addr.IP
+		ipScheme := "ip6"
+		if p4 := ip.To4(); p4 != nil {
+			ipScheme = "ip4"
+			ip = p4
+		}
+		maStr := fmt.Sprintf("/%s/%s/tcp/%d", ipScheme, ip.String(), addr.Port)
 		maddr, err := ma.NewMultiaddr(maStr)
 		if err != nil {
-			continue // Skip invalid addresses
+			continue
 		}
 		peers = append(peers, PeerInfo{
 			AddrInfo: AddrInfo{
