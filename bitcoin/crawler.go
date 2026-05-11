@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -222,11 +221,9 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 					log.WithField("addr", pi.Addr).Debugln("Received unknown message, skipping")
 					continue
 				}
-				if errors.Is(err, io.EOF) {
-					log.WithField("addr", pi.Addr).Warningln("Peer closed connection")
-				} else {
-					log.Errorf("[%s] Failed to read message: %v", pi.Addr, err)
-				}
+
+				result.Error = err
+				result.ErrorStr = err.Error()
 				break Loop
 			}
 
