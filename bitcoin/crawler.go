@@ -118,7 +118,7 @@ type BitcoinResult struct {
 	Protocols        []string
 	ListenAddrs      []ma.Multiaddr
 	Error            error
-	ErrorStr         string
+	ErrorStr         string // It looks like it is not even being used. We could remove it entirely.
 	RoutingTable     *core.RoutingTable[PeerInfo]
 }
 
@@ -131,12 +131,10 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 	var conn net.Conn
 	result.ConnectStartTime = time.Now()
 	conn, result.ConnectError = c.connect(ctx, addrs)
-	result.ConnectEndTime = time.Now()
+
 	if result.ConnectError != nil {
 		result.ConnectErrorStr = db.NetError(result.ConnectError)
-	}
 
-	if conn == nil {
 		result.RoutingTable = &core.RoutingTable[PeerInfo]{
 			PeerID:    pi.ID(),
 			Neighbors: neighbours,
@@ -145,6 +143,8 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 		}
 		result.Error = result.ConnectError
 		result.ErrorStr = result.ConnectErrorStr
+		result.ConnectEndTime = time.Now()
+
 		return result
 	}
 
@@ -152,12 +152,25 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 
 	if err := conn.SetDeadline(time.Now().Add(180 * time.Second)); err != nil {
 		log.WithError(err).Warnln("Could not set connection deadline")
+
+		result.RoutingTable = &core.RoutingTable[PeerInfo]{
+			PeerID:    pi.ID(),
+			Neighbors: neighbours,
+			ErrorBits: uint16(0), // FIXME
+			Error:     err,
+		}
+		result.Error = err
+		result.ErrorStr = err.Error()
+		result.ConnectEndTime = time.Now()
+
+		return result
 	}
 
 	// If we could successfully connect to the peer we actually crawl it.
-	if result.ConnectError == nil {
+	if conn != nil {
 
 		tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr)
+
 		if ok {
 			// construct connect maddr if we have received a response
 			var ipScheme string
@@ -178,8 +191,6 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 			log.WithField("addr", conn.RemoteAddr()).Warnln("Not a TCP address, cannot construct connect maddr")
 		}
 
-		result.ConnectMaddr = pi.AddrInfo.Addr[0]
-
 		nodeRes, err := c.Handshake(conn)
 		result.Agent = nodeRes.UserAgent
 		result.ProtocolVersion = nodeRes.ProtocolVersion
@@ -188,12 +199,18 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 			result.ListenAddrs = []ma.Multiaddr{nodeRes.ListenAddr}
 		}
 		if err != nil {
-			log.Errorf("[%s] Handshake failed: %v", addrs, err)
+			result.Error = fmt.Errorf("Handshake failed")
+			result.ErrorStr = result.Error.Error()
+
+			return result
 		}
 
 		err = c.WriteMessage(conn, wire.NewMsgGetAddr())
 		if err != nil {
-			log.Errorf("[%s] GetAddr failed: %v", addrs, err)
+			result.Error = err
+			result.ErrorStr = result.Error.Error()
+
+			return result
 		}
 
 	Loop:
@@ -256,8 +273,6 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 			log.WithField("addr", pi.Addr).Infoln("Found no peers")
 		}
 
-	} else {
-		result.Error = result.ConnectError
 	}
 
 	result.RoutingTable = &core.RoutingTable[PeerInfo]{
@@ -394,15 +409,11 @@ func (c *Crawler) connect(ctx context.Context, addrs []ma.Multiaddr) (net.Conn, 
 
 	// Retry only if we had a timeout.
 	// If the connection is refused by the node retrying would just make the crawler slower.
-	if err != nil && isTimeoutError(err) {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		conn, err = d.DialContext(ctx, netAddr.Network(), netAddr.String())
 	}
 	return conn, err
-}
-
-func isTimeoutError(err error) bool {
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (c *Crawler) WriteMessage(conn net.Conn, msg wire.Message) error {
