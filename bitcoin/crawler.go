@@ -239,11 +239,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 					break Loop
 				}
 			case *wire.MsgAddrV2:
-				legacyAddrs := make([]*wire.NetAddress, len(tmsg.AddrList))
-				for i, addr := range tmsg.AddrList {
-					legacyAddrs[i] = addr.ToLegacy()
-				}
-				peers := processAddrs(legacyAddrs)
+				peers := processAddrsV2(tmsg.AddrList)
 				neighbours = append(neighbours, peers...)
 				if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
 					break Loop
@@ -397,6 +393,10 @@ func (c *Crawler) connect(ctx context.Context, addrs []ma.Multiaddr) (net.Conn, 
 	if len(addrs) == 0 {
 		return nil, nil
 	}
+	// Skip addresses that require protocols we don't support (e.g. Tor v3 requires a Tor proxy).
+	if !manet.IsThinWaist(addrs[0]) {
+		return nil, fmt.Errorf("unsupported address type: %s", addrs[0])
+	}
 	netAddr, err := manet.ToNetAddr(addrs[0])
 	if err != nil {
 		return nil, err
@@ -431,6 +431,49 @@ func processAddrs(addrs []*wire.NetAddress) []PeerInfo {
 			ip = p4
 		}
 		maStr := fmt.Sprintf("/%s/%s/tcp/%d", ipScheme, ip.String(), addr.Port)
+		maddr, err := ma.NewMultiaddr(maStr)
+		if err != nil {
+			continue
+		}
+		peers = append(peers, PeerInfo{
+			AddrInfo: AddrInfo{
+				id:   maddr.String(),
+				Addr: []ma.Multiaddr{maddr},
+			},
+		})
+	}
+	return peers
+}
+
+// processAddrsV2 converts BIP 155 addrv2 addresses to PeerInfo entries.
+// IPv4, IPv6, and Tor v2 are handled via ToLegacy(). Tor v3 is handled
+// natively using the onion3 multiaddr scheme.
+// I2P, CJDNS, and Yggdrasil are not supported: btcd discards them during
+// wire decoding (ErrSkippedNetworkID) so they never reach this function.
+func processAddrsV2(addrs []*wire.NetAddressV2) []PeerInfo {
+	var peers []PeerInfo
+	for _, addr := range addrs {
+		if addr == nil {
+			continue
+		}
+
+		var maStr string
+		if legacy := addr.ToLegacy(); legacy != nil {
+			ip := legacy.IP
+			ipScheme := "ip6"
+			if p4 := ip.To4(); p4 != nil {
+				ipScheme = "ip4"
+				ip = p4
+			}
+			maStr = fmt.Sprintf("/%s/%s/tcp/%d", ipScheme, ip.String(), legacy.Port)
+		} else if addr.IsTorV3() {
+			// addr.Addr.String() returns "<base32>.onion"; strip the suffix for the onion3 multiaddr scheme
+			host := strings.TrimSuffix(addr.Addr.String(), ".onion")
+			maStr = fmt.Sprintf("/onion3/%s:%d", host, addr.Port)
+		} else {
+			continue
+		}
+
 		maddr, err := ma.NewMultiaddr(maStr)
 		if err != nil {
 			continue
