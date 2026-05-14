@@ -395,7 +395,7 @@ func (c *Crawler) connect(ctx context.Context, addrs []ma.Multiaddr) (net.Conn, 
 	}
 	// Skip addresses that require protocols we don't support (e.g. Tor v3 requires a Tor proxy).
 	if !manet.IsThinWaist(addrs[0]) {
-		return nil, fmt.Errorf("unsupported address type: %s", addrs[0])
+		return nil, fmt.Errorf("unsupported protocol")
 	}
 	netAddr, err := manet.ToNetAddr(addrs[0])
 	if err != nil {
