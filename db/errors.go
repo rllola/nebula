@@ -182,6 +182,9 @@ var knownErrorsPrecedence = []string{
 
 // NetError extracts the appropriate error type from the given error.
 func NetError(err error) string {
+	if err == nil {
+		return ""
+	}
 	unwrapped := errors.Unwrap(err)
 	if unwrapped != nil {
 		errStr := NetError(unwrapped)
