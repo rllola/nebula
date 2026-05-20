@@ -296,13 +296,7 @@ func (c *Crawler) Handshake(ctx context.Context, conn net.Conn) (BitcoinNodeResu
 
 	ip := vmsg.AddrMe.IP
 	if ip != nil && !ip.IsUnspecified() {
-		ipScheme := "ip6"
-		if p4 := ip.To4(); p4 != nil {
-			ipScheme = "ip4"
-			ip = p4
-		}
-		maddrStr := fmt.Sprintf("/%s/%s/tcp/%d", ipScheme, ip.String(), vmsg.AddrMe.Port)
-		if maddr, err := ma.NewMultiaddr(maddrStr); err == nil {
+		if maddr, err := manet.FromNetAddr(&net.TCPAddr{IP: ip, Port: int(vmsg.AddrMe.Port)}); err == nil {
 			result.ListenAddr = maddr
 		}
 	}
