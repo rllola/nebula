@@ -3,6 +3,7 @@ package bitcoin
 import (
 	"encoding/binary"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/net/proxy"
 
 	"github.com/dennis-tra/nebula-crawler/core"
 	"github.com/dennis-tra/nebula-crawler/db"
@@ -60,6 +62,7 @@ type CrawlDriverConfig struct {
 	Version        string
 	DialTimeout    time.Duration
 	BootstrapPeers []ma.Multiaddr
+	TorProxyAddr   string
 	MeterProvider  metric.MeterProvider
 	TracerProvider trace.TracerProvider
 	LogErrors      bool
@@ -84,6 +87,7 @@ type CrawlDriver struct {
 	crawlerCount int
 	writerCount  int
 	crawler      []*Crawler
+	torDialer    proxy.ContextDialer
 }
 
 var _ core.Driver[PeerInfo, core.CrawlResult[PeerInfo]] = (*CrawlDriver)(nil)
@@ -100,9 +104,22 @@ func NewCrawlDriver(dbc db.Client, cfg *CrawlDriverConfig) (*CrawlDriver, error)
 	}
 	close(tasksChan)
 
+	var torDialer proxy.ContextDialer
+	if cfg.TorProxyAddr == "" {
+		log.Infoln("No Tor proxy address configured, dialing onion addresses is disabled.")
+	} else {
+		proxyDialer, err := proxy.SOCKS5("tcp", cfg.TorProxyAddr, nil, &net.Dialer{Timeout: cfg.DialTimeout})
+		if err != nil {
+			return nil, fmt.Errorf("creating tor dialer: %w", err)
+		}
+		torDialer = proxyDialer.(proxy.ContextDialer)
+		log.WithField("proxyAddr", cfg.TorProxyAddr).Infoln("Tor proxy address configured, dialing onion addresses is enabled.")
+	}
+
 	return &CrawlDriver{
 		cfg:       cfg,
 		dbc:       dbc,
+		torDialer: torDialer,
 		tasksChan: tasksChan,
 		crawler:   make([]*Crawler, 0),
 	}, nil
@@ -113,9 +130,10 @@ var logOnce sync.Once
 
 func (d *CrawlDriver) NewWorker() (core.Worker[PeerInfo, core.CrawlResult[PeerInfo]], error) {
 	c := &Crawler{
-		id:   fmt.Sprintf("crawler-%02d", d.crawlerCount),
-		cfg:  d.cfg.CrawlerConfig(),
-		done: make(chan struct{}),
+		id:        fmt.Sprintf("crawler-%02d", d.crawlerCount),
+		cfg:       d.cfg.CrawlerConfig(),
+		torDialer: d.torDialer,
+		done:      make(chan struct{}),
 	}
 
 	d.crawlerCount += 1

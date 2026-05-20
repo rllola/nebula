@@ -13,6 +13,7 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/net/proxy"
 
 	"github.com/dennis-tra/nebula-crawler/core"
 	"github.com/dennis-tra/nebula-crawler/db"
@@ -28,10 +29,12 @@ type CrawlerConfig struct {
 }
 
 type Crawler struct {
-	id           string
-	cfg          *CrawlerConfig
+	id        string
+	cfg       *CrawlerConfig
+	torDialer proxy.ContextDialer
+	done      chan struct{}
+
 	crawledPeers int
-	done         chan struct{}
 }
 
 var _ core.Worker[PeerInfo, core.CrawlResult[PeerInfo]] = (*Crawler)(nil)
@@ -341,26 +344,61 @@ func (c *Crawler) requestMoreAddrs(ctx context.Context, conn net.Conn) error {
 // connect establishes a connection to the given peer, with one retry on timeout
 func (c *Crawler) connect(ctx context.Context, addrs []ma.Multiaddr) (net.Conn, error) {
 	if len(addrs) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("no addresses to connect to")
 	}
-	// Skip addresses that require protocols we don't support (e.g. Tor v3 requires a Tor proxy).
-	if !manet.IsThinWaist(addrs[0]) {
-		return nil, fmt.Errorf("unsupported protocol")
+
+	// we only work single addresses for peers
+	maddr := addrs[0]
+
+	var (
+		dialer  proxy.ContextDialer
+		network string
+		addr    string
+	)
+
+	if onionAddr, err := extractOnionAddress(maddr); err == nil {
+		if c.torDialer == nil {
+			return nil, fmt.Errorf("no transport for protocol: tor dialer not set")
+		}
+
+		// this is an onion address, use the tor SOCKS5 proxy dialer
+		dialer = c.torDialer
+		network = "tcp" // tor uses TCP
+		addr = onionAddr
+	} else if netAddr, err := manet.ToNetAddr(maddr); err == nil {
+		dialer = &net.Dialer{Timeout: c.cfg.DialTimeout}
+		network = netAddr.Network()
+		addr = netAddr.String()
+	} else {
+		return nil, fmt.Errorf("unsupported address: %s", maddr)
 	}
-	netAddr, err := manet.ToNetAddr(addrs[0])
-	if err != nil {
-		return nil, err
-	}
-	d := net.Dialer{Timeout: c.cfg.DialTimeout}
-	conn, err := d.DialContext(ctx, netAddr.Network(), netAddr.String())
+
+	conn, err := dialer.DialContext(ctx, network, addr)
 
 	// Retry only if we had a timeout.
 	// If the connection is refused by the node retrying would just make the crawler slower.
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		conn, err = d.DialContext(ctx, netAddr.Network(), netAddr.String())
+		conn, err = dialer.DialContext(ctx, network, addr)
 	}
+
 	return conn, err
+}
+
+func extractOnionAddress(maddr ma.Multiaddr) (string, error) {
+	// Extract the /onion3 component ("publickey:port")
+	onion3Value, err := maddr.ValueForProtocol(ma.P_ONION3)
+	if err != nil {
+		return "", fmt.Errorf("multiaddress does not contain an onion3 protocol: %w", err)
+	}
+
+	// /onion3 protocol strictly requires a port component
+	parts := strings.Split(onion3Value, ":")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("unexpected onion3 value structure: %s", onion3Value)
+	}
+
+	return fmt.Sprintf("%s.onion:%s", parts[0], parts[1]), nil
 }
 
 func (c *Crawler) WriteMessage(ctx context.Context, conn net.Conn, msg wire.Message) error {
@@ -436,6 +474,16 @@ func processAddrs(addrs []*wire.NetAddress) []PeerInfo {
 	return peers
 }
 
+// https://github.com/btcsuite/btcd/blob/b3cbf4f80ec6e0deef47b9a0b8af777572d3a2f7/wire/netaddressv2.go#L446
+var networkID = map[string]string{
+	string(rune(1)): "ipv4",
+	string(rune(2)): "ipv6",
+	string(rune(3)): "torv2",
+	string(rune(4)): "torv3",
+	string(rune(5)): "i2p",
+	string(rune(6)): "cjdns",
+}
+
 // processAddrsV2 converts BIP 155 addrv2 addresses to PeerInfo entries.
 // IPv4, IPv6, and Tor v2 are handled via ToLegacy(). Tor v3 is handled
 // natively using the onion3 multiaddr scheme.
@@ -444,28 +492,26 @@ func processAddrs(addrs []*wire.NetAddress) []PeerInfo {
 func processAddrsV2(addrs []*wire.NetAddressV2) []PeerInfo {
 	var peers []PeerInfo
 	for _, addr := range addrs {
+		var (
+			maddr ma.Multiaddr
+			err   error
+		)
 		if addr == nil {
 			continue
-		}
-
-		var maStr string
-		if legacy := addr.ToLegacy(); legacy != nil {
-			ip := legacy.IP
-			ipScheme := "ip6"
-			if p4 := ip.To4(); p4 != nil {
-				ipScheme = "ip4"
-				ip = p4
-			}
-			maStr = fmt.Sprintf("/%s/%s/tcp/%d", ipScheme, ip.String(), legacy.Port)
 		} else if addr.IsTorV3() {
 			// addr.Addr.String() returns "<base32>.onion"; strip the suffix for the onion3 multiaddr scheme
 			host := strings.TrimSuffix(addr.Addr.String(), ".onion")
-			maStr = fmt.Sprintf("/onion3/%s:%d", host, addr.Port)
+			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/onion3/%s:%d", host, addr.Port))
 		} else {
-			continue
+			networkStr := networkID[addr.Addr.Network()]
+			switch networkStr {
+			case "ipv4", "ipv6":
+				maddr, err = manet.FromNetAddr(&net.TCPAddr{IP: net.ParseIP(addr.Addr.String()), Port: int(addr.Port)})
+			default:
+				err = fmt.Errorf("unsupported network type: %s", networkStr)
+			}
 		}
 
-		maddr, err := ma.NewMultiaddr(maStr)
 		if err != nil {
 			continue
 		}
