@@ -212,6 +212,14 @@ var CrawlCommand = &cli.Command{
 			Category:    flagCategoryNetwork,
 			Hidden:      true,
 		},
+		&cli.StringFlag{
+			Name:        "tor-proxy-addr",
+			Usage:       "BITCOIN: The proxy address for a Tor proxy (e.g., localhost:9150)",
+			EnvVars:     []string{"NEBULA_CRAWL_TOR_PROXY_ADDR"},
+			Value:       crawlConfig.TorProxyAddr,
+			Destination: &crawlConfig.TorProxyAddr,
+			Category:    flagCategoryNetwork,
+		},
 	},
 }
 
@@ -350,11 +358,13 @@ func CrawlAction(c *cli.Context) error {
 		for _, addrInfo := range bpAddrInfos {
 			bpEnodes = append(bpEnodes, addrInfo.Addrs...)
 		}
+
 		// configure the crawl driver
 		driverCfg := &bitcoin.CrawlDriverConfig{
 			Version:        cfg.Root.Version(),
 			DialTimeout:    cfg.Root.DialTimeout,
 			BootstrapPeers: bpEnodes,
+			TorProxyAddr:   cfg.TorProxyAddr,
 			TracerProvider: cfg.Root.TracerProvider,
 			MeterProvider:  cfg.Root.MeterProvider,
 			LogErrors:      cfg.Root.LogErrors,

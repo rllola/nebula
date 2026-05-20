@@ -427,6 +427,9 @@ type Crawl struct {
 
 	// EnabledGossipSub defines whether to activate gossipsub PX crawling
 	EnableGossipSubPX bool
+
+	// TorProxyAddr defines the address of a Tor proxy for onion services
+	TorProxyAddr string
 }
 
 func (c *Crawl) AddrDialType() AddrType {
