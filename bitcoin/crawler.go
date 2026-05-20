@@ -202,7 +202,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 					break Loop
 				}
 				if err = c.requestMoreAddrs(ctx, conn); err != nil {
-					log.WithField("error", err).Errorf("Error when requesting peers")
+					result.Error = err
 					break Loop
 				}
 			case *wire.MsgAddrV2:
@@ -212,12 +212,13 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 					break Loop
 				}
 				if err = c.requestMoreAddrs(ctx, conn); err != nil {
-					log.WithField("error", err).Errorf("Error when requesting peers")
+					result.Error = err
 					break Loop
 				}
 			case *wire.MsgPing:
 				if err = c.WriteMessage(ctx, conn, wire.NewMsgPong(tmsg.Nonce)); err != nil {
-					continue
+					result.Error = err
+					break Loop
 				}
 			default:
 				if tmsg != nil {
