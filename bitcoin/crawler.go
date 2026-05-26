@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"time"
 
@@ -105,9 +106,22 @@ func (c *Crawler) Work(ctx context.Context, task PeerInfo) (core.CrawlResult[Pee
 }
 
 func (c *Crawler) PeerProperties(result *BitcoinResult) map[string]any {
-	return map[string]any{
+	props := map[string]any{
 		"services": result.Services.String(),
 	}
+	if r := result.RPCResult; r != nil {
+		props["rpc_open"] = r.Error == nil
+		props["rpc_status_code"] = r.StatusCode
+	}
+	return props
+}
+
+// RPCProbeResult holds the outcome of a Bitcoin JSON-RPC port probe.
+// StatusCode is the HTTP response code (e.g. 401 = RPC enabled, auth required).
+// Error is non-nil when the TCP connection or HTTP exchange itself failed.
+type RPCProbeResult struct {
+	StatusCode int
+	Error      error
 }
 
 type BitcoinResult struct {
@@ -122,10 +136,10 @@ type BitcoinResult struct {
 	ListenAddrs      []ma.Multiaddr
 	Error            error
 	RoutingTable     *core.RoutingTable[PeerInfo]
+	RPCResult        *RPCProbeResult
 }
 
-func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
-	result := BitcoinResult{}
+func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) (result BitcoinResult) {
 	neighbours := make([]PeerInfo, 0)
 
 	addrs := pi.Addrs()
@@ -133,6 +147,23 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) BitcoinResult {
 	// limit whole crawl of this peer to 3 minutes
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
+
+	// Start RPC probe in parallel for plain IPv4/IPv6 TCP addresses only.
+	// The probe runs for the lifetime of the crawl; we collect it via defer
+	// so all return paths (connect error, handshake error, normal end) get it.
+	var rpcCh <-chan *RPCProbeResult
+	if len(addrs) > 0 {
+		if netAddr, err := manet.ToNetAddr(addrs[0]); err == nil {
+			if tcpAddr, ok := netAddr.(*net.TCPAddr); ok {
+				rpcCh = probeRPC(ctx, tcpAddr.IP)
+			}
+		}
+	}
+	defer func() {
+		if rpcCh != nil {
+			result.RPCResult = <-rpcCh
+		}
+	}()
 
 	var conn net.Conn
 	result.ConnectStartTime = time.Now()
@@ -399,6 +430,37 @@ func extractOnionAddress(maddr ma.Multiaddr) (string, error) {
 	}
 
 	return fmt.Sprintf("%s.onion:%s", parts[0], parts[1]), nil
+}
+
+// probeRPC sends a Bitcoin JSON-RPC request to port 8332 of the given IP in a
+// goroutine and returns a buffered channel the caller can receive from later.
+func probeRPC(ctx context.Context, ip net.IP) <-chan *RPCProbeResult {
+	ch := make(chan *RPCProbeResult, 1)
+	go func() {
+		result := &RPCProbeResult{}
+		defer func() { ch <- result }()
+
+		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		url := "http://" + net.JoinHostPort(ip.String(), "8332") + "/"
+		req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, url,
+			strings.NewReader(`{"jsonrpc":"1.1","method":"getnetworkinfo","params":[],"id":"nebula"}`))
+		if err != nil {
+			result.Error = err
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			result.Error = err
+			return
+		}
+		resp.Body.Close()
+		result.StatusCode = resp.StatusCode
+	}()
+	return ch
 }
 
 func (c *Crawler) WriteMessage(ctx context.Context, conn net.Conn, msg wire.Message) error {
