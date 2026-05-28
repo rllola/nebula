@@ -23,6 +23,39 @@ import (
 
 const MaxCrawlRetriesAfterTimeout = 2 // magic
 
+const (
+	// P_CJDNS is a project-local multiaddr protocol code for CJDNS transport.
+	// CJDNS addresses are always IPv6 in the fc00::/8 range.
+	P_CJDNS = 1010
+
+	// P_YGGDRASIL is a project-local multiaddr protocol code for Yggdrasil transport.
+	// Yggdrasil addresses are always IPv6 in the 200::/7 range.
+	P_YGGDRASIL = 1011
+)
+
+func init() {
+	for _, p := range []ma.Protocol{
+		{
+			Name:       "cjdns",
+			Code:       P_CJDNS,
+			VCode:      ma.CodeToVarint(P_CJDNS),
+			Size:       128,
+			Transcoder: ma.TranscoderIP6,
+		},
+		{
+			Name:       "yggdrasil",
+			Code:       P_YGGDRASIL,
+			VCode:      ma.CodeToVarint(P_YGGDRASIL),
+			Size:       128,
+			Transcoder: ma.TranscoderIP6,
+		},
+	} {
+		if err := ma.AddProtocol(p); err != nil {
+			panic("bitcoin: failed to register multiaddr protocol " + p.Name + ": " + err.Error())
+		}
+	}
+}
+
 type CrawlerConfig struct {
 	DialTimeout time.Duration
 	LogErrors   bool
@@ -544,13 +577,13 @@ var networkID = map[string]string{
 	string(rune(4)): "torv3",
 	string(rune(5)): "i2p",
 	string(rune(6)): "cjdns",
+	string(rune(7)): "yggdrasil",
 }
 
 // processAddrsV2 converts BIP 155 addrv2 addresses to PeerInfo entries.
-// IPv4, IPv6, and Tor v2 are handled via ToLegacy(). Tor v3 is handled
-// natively using the onion3 multiaddr scheme.
-// I2P, CJDNS, and Yggdrasil are not supported: btcd discards them during
-// wire decoding (ErrSkippedNetworkID) so they never reach this function.
+// IPv4, IPv6, and Tor v2 are handled via ToLegacy(). Tor v3 uses /onion3/,
+// I2P uses /garlic32/, CJDNS uses /ip6/.../cjdns/<port>, and Yggdrasil uses
+// /ip6/.../yggdrasil/<port> with project-local protocol codes (see init).
 func processAddrsV2(addrs []*wire.NetAddressV2) []PeerInfo {
 	var peers []PeerInfo
 	for _, addr := range addrs {
@@ -564,6 +597,14 @@ func processAddrsV2(addrs []*wire.NetAddressV2) []PeerInfo {
 			// addr.Addr.String() returns "<base32>.onion"; strip the suffix for the onion3 multiaddr scheme
 			host := strings.TrimSuffix(addr.Addr.String(), ".onion")
 			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/onion3/%s:%d", host, addr.Port))
+		} else if addr.IsI2P() {
+			// addr.Addr.String() returns "<base32>.b32.i2p"; strip the suffix for the garlic32 multiaddr scheme
+			host := strings.TrimSuffix(addr.Addr.String(), ".b32.i2p")
+			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/garlic32/%s", host))
+		} else if addr.IsCJDNS() {
+			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/cjdns/%s/tcp/%d", addr.Addr.String(), addr.Port))
+		} else if addr.IsYggdrasil() {
+			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/yggdrasil/%s/tcp/%d", addr.Addr.String(), addr.Port))
 		} else {
 			networkStr := networkID[addr.Addr.Network()]
 			switch networkStr {
