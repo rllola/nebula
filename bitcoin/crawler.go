@@ -38,15 +38,15 @@ func init() {
 			Name:       "cjdns",
 			Code:       P_CJDNS,
 			VCode:      ma.CodeToVarint(P_CJDNS),
-			Size:       16,
-			Transcoder: ma.TranscoderPort,
+			Size:       128,
+			Transcoder: ma.TranscoderIP6,
 		},
 		{
 			Name:       "yggdrasil",
 			Code:       P_YGGDRASIL,
 			VCode:      ma.CodeToVarint(P_YGGDRASIL),
-			Size:       16,
-			Transcoder: ma.TranscoderPort,
+			Size:       128,
+			Transcoder: ma.TranscoderIP6,
 		},
 	} {
 		if err := ma.AddProtocol(p); err != nil {
@@ -515,6 +515,7 @@ var networkID = map[string]string{
 	string(rune(4)): "torv3",
 	string(rune(5)): "i2p",
 	string(rune(6)): "cjdns",
+	string(rune(7)): "yggdrasil",
 }
 
 // processAddrsV2 converts BIP 155 addrv2 addresses to PeerInfo entries.
@@ -539,9 +540,9 @@ func processAddrsV2(addrs []*wire.NetAddressV2) []PeerInfo {
 			host := strings.TrimSuffix(addr.Addr.String(), ".b32.i2p")
 			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/garlic32/%s", host))
 		} else if addr.IsCJDNS() {
-			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/ip6/%s/cjdns/%d", addr.Addr.String(), addr.Port))
+			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/cjdns/%s/tcp/%d", addr.Addr.String(), addr.Port))
 		} else if addr.IsYggdrasil() {
-			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/ip6/%s/yggdrasil/%d", addr.Addr.String(), addr.Port))
+			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/yggdrasil/%s/tcp/%d", addr.Addr.String(), addr.Port))
 		} else {
 			networkStr := networkID[addr.Addr.Network()]
 			switch networkStr {
