@@ -139,14 +139,35 @@ func (c *Crawler) Work(ctx context.Context, task PeerInfo) (core.CrawlResult[Pee
 }
 
 func (c *Crawler) PeerProperties(result *BitcoinResult) map[string]any {
-	props := map[string]any{
-		"services": result.Services.String(),
-	}
+	props := map[string]any{}
 	if r := result.RPCResult; r != nil {
 		props["rpc_open"] = r.Error == nil
 		props["rpc_status_code"] = r.StatusCode
 	}
 	return props
+}
+
+// save the available services announced as protocols
+func serviceFlagsToProtocols(services wire.ServiceFlag) []string {
+	known := []wire.ServiceFlag{
+		wire.SFNodeNetwork,
+		wire.SFNodeGetUTXO,
+		wire.SFNodeBloom,
+		wire.SFNodeWitness,
+		wire.SFNodeXthin,
+		wire.SFNodeBit5,
+		wire.SFNodeCF,
+		wire.SFNode2X,
+		wire.SFNodeNetworkLimited,
+		wire.SFNodeP2PV2,
+	}
+	var protocols []string
+	for _, flag := range known {
+		if services&flag != 0 {
+			protocols = append(protocols, flag.String())
+		}
+	}
+	return protocols
 }
 
 // RPCProbeResult holds the outcome of a Bitcoin JSON-RPC port probe.
@@ -221,6 +242,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) (result Bitcoin
 	result.Agent = nodeRes.UserAgent
 	result.ProtocolVersion = nodeRes.ProtocolVersion
 	result.Services = nodeRes.Services
+	result.Protocols = serviceFlagsToProtocols(nodeRes.Services)
 	if nodeRes.ListenAddr != nil {
 		result.ListenAddrs = []ma.Multiaddr{nodeRes.ListenAddr}
 	}
