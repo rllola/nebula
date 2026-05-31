@@ -424,16 +424,7 @@ func (c *Crawler) connect(ctx context.Context, addrs []ma.Multiaddr) (net.Conn, 
 		return nil, fmt.Errorf("unsupported address: %s", maddr)
 	}
 
-	conn, err := dialer.DialContext(ctx, network, addr)
-
-	// Retry only if we had a timeout.
-	// If the connection is refused by the node retrying would just make the crawler slower.
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		conn, err = dialer.DialContext(ctx, network, addr)
-	}
-
-	return conn, err
+	return dialer.DialContext(ctx, network, addr)
 }
 
 func extractOnionAddress(maddr ma.Multiaddr) (string, error) {
