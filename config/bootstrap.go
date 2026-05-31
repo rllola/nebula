@@ -348,6 +348,13 @@ var (
 		"seed.bitnodes.io",
 		"bitseed.xf2.org",
 	}
+
+	BootstrapPeersLitecoinDNSSeeds = []string{
+		"seed-a.litecoin.loshan.co.uk",
+		"dnsseed.thrasher.io",
+		"dnsseed.litecointools.com",
+		"dnsseed.litecoinpool.org",
+	}
 	// BootstrapPeersPortalMainnet extracted from:
 	//	https://github.com/status-im/portal-mainnet/blob/master/config/bootstrap_nodes.txt
 	//  https://github.com/ethereum/portal-network-specs/blob/master/bootnodes.md

@@ -49,6 +49,7 @@ const (
 	NetworkAvailTuringFN  Network = "AVAIL_TURING_FN"
 	NetworkPactus         Network = "PACTUS"
 	NetworkBitcoin        Network = "BITCOIN"
+	NetworkLitecoin       Network = "LITECOIN"
 	NetworkDria           Network = "DRIA"
 	NetworkWakuStatus     Network = "WAKU_STATUS"
 	NetworkWakuTWN        Network = "WAKU_TWN"
@@ -79,6 +80,7 @@ func Networks() []Network {
 		NetworkAvailTuringFN,
 		NetworkPactus,
 		NetworkBitcoin,
+		NetworkLitecoin,
 		NetworkDria,
 		NetworkWakuStatus,
 		NetworkWakuTWN,
@@ -487,7 +489,7 @@ func (c *Crawl) BootstrapEnodesV4() ([]*enode.Node, error) {
 	return enodes, nil
 }
 
-func GetSeedsFromDNS(dnsSeeds []string) []string {
+func GetSeedsFromDNS(dnsSeeds []string, port string) []string {
 	wait := sync.WaitGroup{}
 	results := make(chan []net.IP)
 
@@ -511,7 +513,7 @@ func GetSeedsFromDNS(dnsSeeds []string) []string {
 	seeds := []string{}
 	for ips := range results {
 		for _, ip := range ips {
-			seeds = append(seeds, net.JoinHostPort(ip.String(), chaincfg.MainNetParams.DefaultPort))
+			seeds = append(seeds, net.JoinHostPort(ip.String(), port))
 		}
 	}
 
@@ -520,7 +522,7 @@ func GetSeedsFromDNS(dnsSeeds []string) []string {
 }
 
 func (c *Crawl) BootstrapBitcoinEntries() ([]ma.Multiaddr, error) {
-	addresses := GetSeedsFromDNS(c.BootstrapPeers.Value())
+	addresses := GetSeedsFromDNS(c.BootstrapPeers.Value(), chaincfg.MainNetParams.DefaultPort)
 	addrInfos := make([]ma.Multiaddr, 0, len(addresses))
 
 	for _, addr := range addresses {
@@ -530,6 +532,23 @@ func (c *Crawl) BootstrapBitcoinEntries() ([]ma.Multiaddr, error) {
 		}
 
 		// Directly append to the slice
+		if maddr != nil {
+			addrInfos = append(addrInfos, maddr)
+		}
+	}
+
+	return addrInfos, nil
+}
+
+func (c *Crawl) BootstrapLitecoinEntries() ([]ma.Multiaddr, error) {
+	addresses := GetSeedsFromDNS(c.BootstrapPeers.Value(), "9333")
+	addrInfos := make([]ma.Multiaddr, 0, len(addresses))
+
+	for _, addr := range addresses {
+		maddr, err := toMultiAddr(addr)
+		if err != nil {
+			return nil, fmt.Errorf("Couldn't Parse multiaddress %s: %w", addr, err)
+		}
 		if maddr != nil {
 			addrInfos = append(addrInfos, maddr)
 		}
@@ -696,6 +715,9 @@ func ConfigureNetwork(network string) (*cli.StringSlice, *cli.StringSlice, error
 	case NetworkBitcoin:
 		bootstrapPeers = cli.NewStringSlice(BootstrapPeersBitcoinDNSSeeds...)
 		protocols = cli.NewStringSlice("bitcoin")
+	case NetworkLitecoin:
+		bootstrapPeers = cli.NewStringSlice(BootstrapPeersLitecoinDNSSeeds...)
+		protocols = cli.NewStringSlice("litecoin")
 	case NetworkWakuStatus:
 		bootstrapPeers = cli.NewStringSlice(BootstrapPeersWakuStatus...)
 		protocols = cli.NewStringSlice("d5waku")

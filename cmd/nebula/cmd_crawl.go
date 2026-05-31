@@ -11,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/btcsuite/btcd/wire"
 	kaddht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/network"
+	ma "github.com/multiformats/go-multiaddr"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
 
@@ -349,10 +351,29 @@ func CrawlAction(c *cli.Context) error {
 		// finally, start the crawl
 		summary, runErr = eng.Run(ctx)
 
-	case string(config.NetworkBitcoin):
-		bpEnodes, err := cfg.BootstrapBitcoinEntries()
-		if err != nil {
-			return err
+	case string(config.NetworkBitcoin), string(config.NetworkLitecoin):
+		var bpEnodes []ma.Multiaddr
+		var netCfg struct {
+			net     wire.BitcoinNet
+			rpcPort string
+		}
+
+		if crawlConfig.Network == string(config.NetworkLitecoin) {
+			entries, err := cfg.BootstrapLitecoinEntries()
+			if err != nil {
+				return err
+			}
+			bpEnodes = entries
+			netCfg.net = bitcoin.LitecoinMainNet
+			netCfg.rpcPort = "9332"
+		} else {
+			entries, err := cfg.BootstrapBitcoinEntries()
+			if err != nil {
+				return err
+			}
+			bpEnodes = entries
+			netCfg.net = wire.MainNet
+			netCfg.rpcPort = "8332"
 		}
 
 		for _, addrInfo := range bpAddrInfos {
@@ -368,12 +389,14 @@ func CrawlAction(c *cli.Context) error {
 			TracerProvider: cfg.Root.TracerProvider,
 			MeterProvider:  cfg.Root.MeterProvider,
 			LogErrors:      cfg.Root.LogErrors,
+			Net:            netCfg.net,
+			RPCPort:        netCfg.rpcPort,
 		}
 
 		// init the crawl driver
 		driver, err := bitcoin.NewCrawlDriver(dbc, driverCfg)
 		if err != nil {
-			return fmt.Errorf("new bitcoin driver: %w", err)
+			return fmt.Errorf("new %s driver: %w", crawlConfig.Network, err)
 		}
 
 		// init the result handler
