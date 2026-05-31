@@ -60,6 +60,8 @@ type CrawlerConfig struct {
 	DialTimeout time.Duration
 	LogErrors   bool
 	Version     string
+	Net         wire.BitcoinNet
+	RPCPort     string
 }
 
 type Crawler struct {
@@ -209,7 +211,7 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) (result Bitcoin
 	if len(addrs) > 0 {
 		if netAddr, err := manet.ToNetAddr(addrs[0]); err == nil {
 			if tcpAddr, ok := netAddr.(*net.TCPAddr); ok {
-				rpcCh = probeRPC(ctx, tcpAddr.IP)
+				rpcCh = probeRPC(ctx, tcpAddr.IP, c.cfg.RPCPort)
 			}
 		}
 	}
@@ -467,7 +469,7 @@ func extractOnionAddress(maddr ma.Multiaddr) (string, error) {
 
 // probeRPC sends a Bitcoin JSON-RPC request to port 8332 of the given IP in a
 // goroutine and returns a buffered channel the caller can receive from later.
-func probeRPC(ctx context.Context, ip net.IP) <-chan *RPCProbeResult {
+func probeRPC(ctx context.Context, ip net.IP, rpcPort string) <-chan *RPCProbeResult {
 	ch := make(chan *RPCProbeResult, 1)
 	go func() {
 		result := &RPCProbeResult{}
@@ -476,7 +478,7 @@ func probeRPC(ctx context.Context, ip net.IP) <-chan *RPCProbeResult {
 		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 
-		url := "http://" + net.JoinHostPort(ip.String(), "8332") + "/"
+		url := "http://" + net.JoinHostPort(ip.String(), rpcPort) + "/"
 		req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, url,
 			strings.NewReader(`{"jsonrpc":"1.1","method":"getnetworkinfo","params":[],"id":"nebula"}`))
 		if err != nil {
@@ -499,7 +501,7 @@ func probeRPC(ctx context.Context, ip net.IP) <-chan *RPCProbeResult {
 func (c *Crawler) WriteMessage(ctx context.Context, conn net.Conn, msg wire.Message) error {
 	return withContext(ctx, conn, func() error {
 		_ = conn.SetWriteDeadline(time.Now().Add(c.cfg.DialTimeout))
-		return wire.WriteMessage(conn, msg, wire.ProtocolVersion, wire.MainNet)
+		return wire.WriteMessage(conn, msg, wire.ProtocolVersion, c.cfg.Net)
 	})
 }
 
@@ -509,7 +511,7 @@ func (c *Crawler) ReadMessage(ctx context.Context, conn net.Conn) (wire.Message,
 	var ierr error
 	err := withContext(ctx, conn, func() error {
 		_ = conn.SetReadDeadline(time.Now().Add(c.cfg.DialTimeout))
-		msg, data, ierr = wire.ReadMessage(conn, wire.ProtocolVersion, wire.MainNet)
+		msg, data, ierr = wire.ReadMessage(conn, wire.ProtocolVersion, c.cfg.Net)
 		return ierr
 	})
 	return msg, data, err

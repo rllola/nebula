@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/wire"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/multiformats/go-multihash"
@@ -63,6 +64,9 @@ func (p PeerInfo) DiscoveryPrefix() uint64 {
 	return binary.BigEndian.Uint64([]byte(p.id)[:8])
 }
 
+// LitecoinMainNet is the Litecoin mainnet magic bytes (BIP 155 network ID 6).
+const LitecoinMainNet wire.BitcoinNet = 0xdbb6c0fb
+
 type CrawlDriverConfig struct {
 	Version        string
 	DialTimeout    time.Duration
@@ -71,6 +75,8 @@ type CrawlDriverConfig struct {
 	MeterProvider  metric.MeterProvider
 	TracerProvider trace.TracerProvider
 	LogErrors      bool
+	Net            wire.BitcoinNet
+	RPCPort        string
 }
 
 func (cfg *CrawlDriverConfig) CrawlerConfig() *CrawlerConfig {
@@ -78,6 +84,8 @@ func (cfg *CrawlDriverConfig) CrawlerConfig() *CrawlerConfig {
 		DialTimeout: cfg.DialTimeout,
 		LogErrors:   cfg.LogErrors,
 		Version:     cfg.Version,
+		Net:         cfg.Net,
+		RPCPort:     cfg.RPCPort,
 	}
 }
 
