@@ -1,6 +1,7 @@
 package bitcoin
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
+	"github.com/multiformats/go-multihash"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
@@ -30,7 +32,10 @@ type PeerInfo struct {
 var _ core.PeerInfo[PeerInfo] = (*PeerInfo)(nil)
 
 func (p PeerInfo) ID() peer.ID {
-	return peer.ID(p.AddrInfo.id)
+	h := sha256.New()
+	h.Write([]byte(p.AddrInfo.id))
+	mh, _ := multihash.Encode(h.Sum(nil), multihash.SHA2_256) // method can't fail
+	return peer.ID(mh)
 }
 
 func (p PeerInfo) Addrs() []ma.Multiaddr {
