@@ -204,93 +204,80 @@ func (c *Crawler) crawlBitcoin(ctx context.Context, pi PeerInfo) (result Bitcoin
 	result.ConnectEndTime = time.Now()
 
 	if result.ConnectError != nil {
-
 		result.RoutingTable = &core.RoutingTable[PeerInfo]{
 			PeerID:    pi.ID(),
 			Neighbors: neighbours,
 			ErrorBits: uint16(0), // FIXME
 			Error:     result.ConnectError,
 		}
-		result.Error = result.ConnectError
-
 		return result
 	}
 
 	defer conn.Close()
 
-	// If we could successfully connect to the peer we actually crawl it.
-	if conn != nil {
+	result.ConnectMaddr = addrs[0]
 
-		maddr, err := manet.FromNetAddr(conn.RemoteAddr())
-		if err != nil {
-			log.WithError(err).WithField("addr", conn.RemoteAddr()).Warnln("Could not construct connect maddr")
-		} else {
-			result.ConnectMaddr = maddr
-		}
+	nodeRes, err := c.Handshake(ctx, conn)
+	result.Agent = nodeRes.UserAgent
+	result.ProtocolVersion = nodeRes.ProtocolVersion
+	result.Services = nodeRes.Services
+	if nodeRes.ListenAddr != nil {
+		result.ListenAddrs = []ma.Multiaddr{nodeRes.ListenAddr}
+	}
+	if err != nil {
+		result.Error = err
+		return result
+	}
 
-		nodeRes, err := c.Handshake(ctx, conn)
-		result.Agent = nodeRes.UserAgent
-		result.ProtocolVersion = nodeRes.ProtocolVersion
-		result.Services = nodeRes.Services
-		if nodeRes.ListenAddr != nil {
-			result.ListenAddrs = []ma.Multiaddr{nodeRes.ListenAddr}
-		}
+	err = c.WriteMessage(ctx, conn, wire.NewMsgGetAddr())
+	if err != nil {
+		result.Error = err
+		return result
+	}
+
+Loop:
+	for {
+		// Read messages in a loop and handle the different message types accordingly
+		msg, _, err := c.ReadMessage(ctx, conn)
 		if err != nil {
+			if errors.Is(err, wire.ErrUnknownMessage) {
+				log.WithField("addr", pi.Addr).Debugln("Received unknown message, skipping")
+				continue
+			}
+
 			result.Error = err
-			return result
+			break Loop
 		}
 
-		err = c.WriteMessage(ctx, conn, wire.NewMsgGetAddr())
-		if err != nil {
-			result.Error = err
-
-			return result
-		}
-
-	Loop:
-		for {
-			// Read messages in a loop and handle the different message types accordingly
-			msg, _, err := c.ReadMessage(ctx, conn)
-			if err != nil {
-				if errors.Is(err, wire.ErrUnknownMessage) {
-					log.WithField("addr", pi.Addr).Debugln("Received unknown message, skipping")
-					continue
-				}
-
+		switch tmsg := msg.(type) {
+		case *wire.MsgAddr:
+			peers := processAddrs(tmsg.AddrList)
+			neighbours = append(neighbours, peers...)
+			if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
+				break Loop
+			}
+			if err = c.requestMoreAddrs(ctx, conn); err != nil {
 				result.Error = err
 				break Loop
 			}
-
-			switch tmsg := msg.(type) {
-			case *wire.MsgAddr:
-				peers := processAddrs(tmsg.AddrList)
-				neighbours = append(neighbours, peers...)
-				if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
-					break Loop
-				}
-				if err = c.requestMoreAddrs(ctx, conn); err != nil {
-					result.Error = err
-					break Loop
-				}
-			case *wire.MsgAddrV2:
-				peers := processAddrsV2(tmsg.AddrList)
-				neighbours = append(neighbours, peers...)
-				if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
-					break Loop
-				}
-				if err = c.requestMoreAddrs(ctx, conn); err != nil {
-					result.Error = err
-					break Loop
-				}
-			case *wire.MsgPing:
-				if err = c.WriteMessage(ctx, conn, wire.NewMsgPong(tmsg.Nonce)); err != nil {
-					result.Error = err
-					break Loop
-				}
-			default:
-				if tmsg != nil {
-					log.WithField("msg_type", tmsg.Command()).Debugf("Found other message from %s", pi.Addr)
-				}
+		case *wire.MsgAddrV2:
+			peers := processAddrsV2(tmsg.AddrList)
+			neighbours = append(neighbours, peers...)
+			if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
+				break Loop
+			}
+			if err = c.requestMoreAddrs(ctx, conn); err != nil {
+				result.Error = err
+				break Loop
+			}
+		case *wire.MsgPing:
+			if err = c.WriteMessage(ctx, conn, wire.NewMsgPong(tmsg.Nonce)); err != nil {
+				result.Error = err
+				break Loop
+			}
+		default:
+			if tmsg != nil {
+				log.WithField("msg_type", tmsg.Command()).Debugf("Found other message from %s", pi.Addr)
 			}
 		}
 	}
