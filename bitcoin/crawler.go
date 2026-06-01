@@ -149,23 +149,9 @@ func (c *Crawler) PeerProperties(result *BitcoinResult) map[string]any {
 
 // save the available services announced as protocols
 func serviceFlagsToProtocols(services wire.ServiceFlag) []string {
-	known := []wire.ServiceFlag{
-		wire.SFNodeNetwork,
-		wire.SFNodeGetUTXO,
-		wire.SFNodeBloom,
-		wire.SFNodeWitness,
-		wire.SFNodeXthin,
-		wire.SFNodeBit5,
-		wire.SFNodeCF,
-		wire.SFNode2X,
-		wire.SFNodeNetworkLimited,
-		wire.SFNodeP2PV2,
-	}
-	var protocols []string
-	for _, flag := range known {
-		if services&flag != 0 {
-			protocols = append(protocols, flag.String())
-		}
+	protocols := make([]string, len(services))
+	for i, svc := range services {
+		protocols[i] = svc.String()
 	}
 	return protocols
 }
