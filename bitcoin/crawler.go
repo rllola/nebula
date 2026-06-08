@@ -278,20 +278,14 @@ Loop:
 			if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
 				break Loop
 			}
-			if err = c.requestMoreAddrs(ctx, conn); err != nil {
-				result.Error = err
-				break Loop
-			}
+			c.requestMoreAddrs(ctx, conn)
 		case *wire.MsgAddrV2:
 			peers := processAddrsV2(tmsg.AddrList)
 			neighbours = append(neighbours, peers...)
 			if len(tmsg.AddrList) < wire.MaxAddrPerMsg {
 				break Loop
 			}
-			if err = c.requestMoreAddrs(ctx, conn); err != nil {
-				result.Error = err
-				break Loop
-			}
+			c.requestMoreAddrs(ctx, conn)
 		case *wire.MsgPing:
 			if err = c.WriteMessage(ctx, conn, wire.NewMsgPong(tmsg.Nonce)); err != nil {
 				result.Error = err
@@ -405,13 +399,15 @@ func (c *Crawler) Handshake(ctx context.Context, conn net.Conn) (BitcoinNodeResu
 // Core rate-limits getaddr responses and will drop requests that arrive too
 // quickly on the same connection.
 // https://github.com/bitcoin/bitcoin/blob/8396b7f2a3be4be7bb2ffc152f87b4cab95dd84e/src/net_processing.cpp#L160
-func (c *Crawler) requestMoreAddrs(ctx context.Context, conn net.Conn) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(30 * time.Second):
-	}
-	return c.WriteMessage(ctx, conn, wire.NewMsgGetAddr())
+func (c *Crawler) requestMoreAddrs(ctx context.Context, conn net.Conn) {
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(30 * time.Second):
+		}
+		c.WriteMessage(ctx, conn, wire.NewMsgGetAddr()) //nolint:errcheck
+	}()
 }
 
 // connect establishes a connection to the given peer, with one retry on timeout
