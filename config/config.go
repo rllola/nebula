@@ -430,6 +430,9 @@ type Crawl struct {
 
 	// TorProxyAddr defines the address of a Tor proxy for onion services
 	TorProxyAddr string
+
+	// I2PProxyAddr defines the address of an I2P SOCKS5 proxy for I2P addresses
+	I2PProxyAddr string
 }
 
 func (c *Crawl) AddrDialType() AddrType {

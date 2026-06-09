@@ -68,6 +68,7 @@ type CrawlDriverConfig struct {
 	DialTimeout    time.Duration
 	BootstrapPeers []ma.Multiaddr
 	TorProxyAddr   string
+	I2PProxyAddr   string
 	MeterProvider  metric.MeterProvider
 	TracerProvider trace.TracerProvider
 	LogErrors      bool
@@ -93,6 +94,7 @@ type CrawlDriver struct {
 	writerCount  int
 	crawler      []*Crawler
 	torDialer    proxy.ContextDialer
+	i2pDialer    proxy.ContextDialer
 }
 
 var _ core.Driver[PeerInfo, core.CrawlResult[PeerInfo]] = (*CrawlDriver)(nil)
@@ -121,10 +123,23 @@ func NewCrawlDriver(dbc db.Client, cfg *CrawlDriverConfig) (*CrawlDriver, error)
 		log.WithField("proxyAddr", cfg.TorProxyAddr).Infoln("Tor proxy address configured, dialing onion addresses is enabled.")
 	}
 
+	var i2pDialer proxy.ContextDialer
+	if cfg.I2PProxyAddr == "" {
+		log.Infoln("No I2P proxy address configured, dialing I2P addresses is disabled.")
+	} else {
+		proxyDialer, err := proxy.SOCKS5("tcp", cfg.I2PProxyAddr, nil, &net.Dialer{Timeout: cfg.DialTimeout})
+		if err != nil {
+			return nil, fmt.Errorf("creating i2p dialer: %w", err)
+		}
+		i2pDialer = proxyDialer.(proxy.ContextDialer)
+		log.WithField("proxyAddr", cfg.I2PProxyAddr).Infoln("I2P proxy address configured, dialing I2P addresses is enabled.")
+	}
+
 	return &CrawlDriver{
 		cfg:       cfg,
 		dbc:       dbc,
 		torDialer: torDialer,
+		i2pDialer: i2pDialer,
 		tasksChan: tasksChan,
 		crawler:   make([]*Crawler, 0),
 	}, nil
@@ -138,6 +153,7 @@ func (d *CrawlDriver) NewWorker() (core.Worker[PeerInfo, core.CrawlResult[PeerIn
 		id:        fmt.Sprintf("crawler-%02d", d.crawlerCount),
 		cfg:       d.cfg.CrawlerConfig(),
 		torDialer: d.torDialer,
+		i2pDialer: d.i2pDialer,
 		done:      make(chan struct{}),
 	}
 

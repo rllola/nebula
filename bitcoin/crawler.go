@@ -66,6 +66,7 @@ type Crawler struct {
 	id        string
 	cfg       *CrawlerConfig
 	torDialer proxy.ContextDialer
+	i2pDialer proxy.ContextDialer
 	done      chan struct{}
 
 	crawledPeers int
@@ -438,6 +439,14 @@ func (c *Crawler) connect(ctx context.Context, addrs []ma.Multiaddr) (net.Conn, 
 		dialer = c.torDialer
 		network = "tcp" // tor uses TCP
 		addr = onionAddr
+	} else if i2pAddr, err := extractI2PAddress(maddr); err == nil {
+		if c.i2pDialer == nil {
+			return nil, fmt.Errorf("no transport for protocol: i2p dialer not set")
+		}
+
+		dialer = c.i2pDialer
+		network = "tcp"
+		addr = i2pAddr
 	} else if netAddr, err := manet.ToNetAddr(maddr); err == nil {
 		dialer = &net.Dialer{Timeout: c.cfg.DialTimeout}
 		network = netAddr.Network()
@@ -463,6 +472,21 @@ func extractOnionAddress(maddr ma.Multiaddr) (string, error) {
 	}
 
 	return fmt.Sprintf("%s.onion:%s", parts[0], parts[1]), nil
+}
+
+func extractI2PAddress(maddr ma.Multiaddr) (string, error) {
+	hash, err := maddr.ValueForProtocol(ma.P_GARLIC32)
+	if err != nil {
+		return "", fmt.Errorf("multiaddress does not contain a garlic32 protocol: %w", err)
+	}
+
+	// Use an explicit TCP port when available, otherwise fall back to the Bitcoin default.
+	port := "8333"
+	if tcpPort, err := maddr.ValueForProtocol(ma.P_TCP); err == nil && tcpPort != "0" {
+		port = tcpPort
+	}
+
+	return net.JoinHostPort(hash+".b32.i2p", port), nil
 }
 
 // probeRPC sends a Bitcoin JSON-RPC request to port 8332 of the given IP in a
@@ -600,7 +624,11 @@ func processAddrsV2(addrs []*wire.NetAddressV2) []PeerInfo {
 		} else if addr.IsI2P() {
 			// addr.Addr.String() returns "<base32>.b32.i2p"; strip the suffix for the garlic32 multiaddr scheme
 			host := strings.TrimSuffix(addr.Addr.String(), ".b32.i2p")
-			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/garlic32/%s", host))
+			if addr.Port > 0 {
+				maddr, err = ma.NewMultiaddr(fmt.Sprintf("/garlic32/%s/tcp/%d", host, addr.Port))
+			} else {
+				maddr, err = ma.NewMultiaddr(fmt.Sprintf("/garlic32/%s", host))
+			}
 		} else if addr.IsCJDNS() {
 			maddr, err = ma.NewMultiaddr(fmt.Sprintf("/cjdns/%s/tcp/%d", addr.Addr.String(), addr.Port))
 		} else if addr.IsYggdrasil() {
