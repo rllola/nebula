@@ -373,6 +373,7 @@ func CrawlAction(c *cli.Context) error {
 			DialTimeout:    cfg.Root.DialTimeout,
 			BootstrapPeers: bpEnodes,
 			TorProxyAddr:   cfg.TorProxyAddr,
+			I2PProxyAddr:   cfg.I2PProxyAddr,
 			TracerProvider: cfg.Root.TracerProvider,
 			MeterProvider:  cfg.Root.MeterProvider,
 			LogErrors:      cfg.Root.LogErrors,
