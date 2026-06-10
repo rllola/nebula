@@ -222,7 +222,7 @@ var CrawlCommand = &cli.Command{
 		},
 		&cli.StringFlag{
 			Name:        "i2p-proxy-addr",
-			Usage:       "BITCOIN: The proxy address for an I2P SOCKS5 proxy (e.g., localhost:4447)",
+			Usage:       "BITCOIN: The address of an I2P HTTP proxy supporting CONNECT (e.g., localhost:4444)",
 			EnvVars:     []string{"NEBULA_CRAWL_I2P_PROXY_ADDR"},
 			Value:       crawlConfig.I2PProxyAddr,
 			Destination: &crawlConfig.I2PProxyAddr,

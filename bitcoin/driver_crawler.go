@@ -1,10 +1,13 @@
 package bitcoin
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,12 +130,8 @@ func NewCrawlDriver(dbc db.Client, cfg *CrawlDriverConfig) (*CrawlDriver, error)
 	if cfg.I2PProxyAddr == "" {
 		log.Infoln("No I2P proxy address configured, dialing I2P addresses is disabled.")
 	} else {
-		proxyDialer, err := proxy.SOCKS5("tcp", cfg.I2PProxyAddr, nil, &net.Dialer{Timeout: cfg.DialTimeout})
-		if err != nil {
-			return nil, fmt.Errorf("creating i2p dialer: %w", err)
-		}
-		i2pDialer = proxyDialer.(proxy.ContextDialer)
-		log.WithField("proxyAddr", cfg.I2PProxyAddr).Infoln("I2P proxy address configured, dialing I2P addresses is enabled.")
+		i2pDialer = &i2pHTTPConnectDialer{proxyAddr: cfg.I2PProxyAddr, dialTimeout: cfg.DialTimeout}
+		log.WithField("proxyAddr", cfg.I2PProxyAddr).Infoln("I2P HTTP proxy configured, dialing I2P addresses is enabled.")
 	}
 
 	return &CrawlDriver{
@@ -177,4 +176,61 @@ func (d *CrawlDriver) Tasks() <-chan PeerInfo {
 }
 
 func (d *CrawlDriver) Close() {
+}
+
+// i2pHTTPConnectDialer tunnels connections through an I2P HTTP proxy using the
+// CONNECT method, which creates a raw TCP tunnel suitable for any protocol.
+type i2pHTTPConnectDialer struct {
+	proxyAddr   string
+	dialTimeout time.Duration
+}
+
+func (d *i2pHTTPConnectDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	conn, err := (&net.Dialer{Timeout: d.dialTimeout}).DialContext(ctx, "tcp", d.proxyAddr)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to i2p proxy: %w", err)
+	}
+
+	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", addr, addr)
+
+	code, err := readHTTPConnectResponse(conn)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("reading i2p proxy response: %w", err)
+	}
+	if code != 200 {
+		conn.Close()
+		return nil, fmt.Errorf("i2p proxy CONNECT rejected with status %d", code)
+	}
+
+	return conn, nil
+}
+
+// readHTTPConnectResponse reads the HTTP response to a CONNECT request
+// byte-by-byte to avoid buffering any subsequent protocol data.
+func readHTTPConnectResponse(conn net.Conn) (int, error) {
+	var buf []byte
+	b := make([]byte, 1)
+	for {
+		if _, err := conn.Read(b); err != nil {
+			return 0, err
+		}
+		buf = append(buf, b[0])
+		if len(buf) >= 4 && string(buf[len(buf)-4:]) == "\r\n\r\n" {
+			break
+		}
+		if len(buf) > 4096 {
+			return 0, fmt.Errorf("proxy response headers exceeded 4096 bytes")
+		}
+	}
+	firstLine := strings.SplitN(string(buf), "\r\n", 2)[0]
+	parts := strings.SplitN(firstLine, " ", 3)
+	if len(parts) < 2 {
+		return 0, fmt.Errorf("malformed HTTP status line: %q", firstLine)
+	}
+	code, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, fmt.Errorf("invalid HTTP status code %q: %w", parts[1], err)
+	}
+	return code, nil
 }
